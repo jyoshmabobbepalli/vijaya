@@ -1,0 +1,239 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <string.h>
+
+#define MAX_TOKEN_LEN 100
+#define MAX_SYMBOLS 100
+
+// Token Types
+typedef enum {
+    TOKEN_INT, TOKEN_IDENTIFIER, TOKEN_NUMBER, TOKEN_ASSIGN,
+    TOKEN_PLUS, TOKEN_MINUS, TOKEN_IF, TOKEN_EQUAL,
+    TOKEN_LBRACE, TOKEN_RBRACE, TOKEN_SEMICOLON,
+    TOKEN_UNKNOWN, TOKEN_EOF
+} TokenType;
+
+// Token Structure
+typedef struct {
+    TokenType type;
+    char text[MAX_TOKEN_LEN];
+} Token;
+
+// Symbol Table Entry
+typedef struct {
+    char name[MAX_TOKEN_LEN];
+    int declared;
+} Symbol;
+
+Symbol symbolTable[MAX_SYMBOLS];
+int symbolCount = 0;
+
+// Input program as a string
+const char *input =
+    "int a;\n"
+    "int b;\n"
+    "a = 10;\n"
+    "b = a + 5;\n"
+    "if (b == 15) {\n"
+    "    b = b + 1;\n"
+    "}\n";
+
+int currentIndex = 0;
+
+// Lexer: Tokenizes SimpleLang code
+void getNextToken(Token *token) {
+    char c;
+    while ((c = input[currentIndex++]) != '\0') {
+        if (isspace(c)) continue;
+        if (isalpha(c)) {
+            int len = 0;
+            token->text[len++] = c;
+            while (isalnum(c = input[currentIndex++])) {
+                if (len < MAX_TOKEN_LEN - 1) token->text[len++] = c;
+            }
+            currentIndex--;
+            token->text[len] = '\0';
+            if (strcmp(token->text, "int") == 0) token->type = TOKEN_INT;
+            else if (strcmp(token->text, "if") == 0) token->type = TOKEN_IF;
+            else token->type = TOKEN_IDENTIFIER;
+            return;
+        }
+        if (isdigit(c)) {
+            int len = 0;
+            token->text[len++] = c;
+            while (isdigit(c = input[currentIndex++])) {
+                if (len < MAX_TOKEN_LEN - 1) token->text[len++] = c;
+            }
+            currentIndex--;
+            token->text[len] = '\0';
+            token->type = TOKEN_NUMBER;
+            return;
+        }
+        switch (c) {
+            case '=':
+                if (input[currentIndex] == '=') { // Handle ==
+                    token->type = TOKEN_EQUAL;
+                    token->text[0] = '=';
+                    token->text[1] = '=';
+                    token->text[2] = '\0';
+                    currentIndex++;
+                } else {
+                    token->type = TOKEN_ASSIGN;
+                    token->text[0] = '=';
+                    token->text[1] = '\0';
+                }
+                return;
+            case '+': token->type = TOKEN_PLUS; token->text[0] = '+'; token->text[1] = '\0'; return;
+            case '-': token->type = TOKEN_MINUS; token->text[0] = '-'; token->text[1] = '\0'; return;
+            case '{': token->type = TOKEN_LBRACE; token->text[0] = '{'; token->text[1] = '\0'; return;
+            case '}': token->type = TOKEN_RBRACE; token->text[0] = '}'; token->text[1] = '\0'; return;
+            case ';': token->type = TOKEN_SEMICOLON; token->text[0] = ';'; token->text[1] = '\0'; return;
+            default: token->type = TOKEN_UNKNOWN; token->text[0] = c; token->text[1] = '\0'; return;
+        }
+    }
+    token->type = TOKEN_EOF;
+    token->text[0] = '\0';
+}
+
+// Add a symbol to the symbol table
+void addSymbol(const char *name) {
+    for (int i = 0; i < symbolCount; i++) {
+        if (strcmp(symbolTable[i].name, name) == 0) {
+            return; // Already exists
+        }
+    }
+    strcpy(symbolTable[symbolCount].name, name);
+    symbolTable[symbolCount].declared = 1;
+    symbolCount++;
+}
+
+// Check if a symbol exists in the symbol table
+int isSymbolDeclared(const char *name) {
+    for (int i = 0; i < symbolCount; i++) {
+        if (strcmp(symbolTable[i].name, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// AST Node Types
+typedef enum {
+    NODE_PROGRAM, NODE_DECLARATION, NODE_ASSIGNMENT, NODE_ARITHMETIC, NODE_CONDITIONAL
+} NodeType;
+
+// AST Node Structure
+typedef struct ASTNode {
+    NodeType type;
+    char value[MAX_TOKEN_LEN];
+    struct ASTNode *left;
+    struct ASTNode *right;
+} ASTNode;
+
+// Create an AST Node
+ASTNode *createNode(NodeType type, const char *value) {
+    ASTNode *node = (ASTNode *)malloc(sizeof(ASTNode));
+    node->type = type;
+    strcpy(node->value, value);
+    node->left = NULL;
+    node->right = NULL;
+    return node;
+}
+
+// Parse arithmetic expressions
+ASTNode *parseArithmetic(Token *token) {
+    ASTNode *left = createNode(NODE_ARITHMETIC, token->text);
+
+    getNextToken(token);  // Move to the next token (operand or operator)
+    
+    if (token->type == TOKEN_PLUS || token->type == TOKEN_MINUS) {
+        ASTNode *op = createNode(NODE_ARITHMETIC, token->text);
+        getNextToken(token);  // Get next token for the second operand
+
+        if (token->type == TOKEN_NUMBER || token->type == TOKEN_IDENTIFIER) {
+            op->left = left;
+            op->right = createNode(NODE_ARITHMETIC, token->text);
+            return op;
+        }
+    }
+
+    return left;
+}
+
+// Parse the program
+ASTNode *parseProgram() {
+    Token token;
+    ASTNode *root = createNode(NODE_PROGRAM, "Program");
+    ASTNode *current = root;
+
+    while (1) {
+        getNextToken(&token);
+        if (token.type == TOKEN_EOF) break;
+
+        if (token.type == TOKEN_INT) {
+            getNextToken(&token);
+            if (token.type == TOKEN_IDENTIFIER) {
+                addSymbol(token.text);
+                ASTNode *decl = createNode(NODE_DECLARATION, token.text);
+                current->left = decl;
+                current = decl;
+            }
+        } else if (token.type == TOKEN_IDENTIFIER) {
+            if (!isSymbolDeclared(token.text)) {
+                printf("Error: Undeclared variable %s\n", token.text);
+                exit(1);
+            }
+
+            char identifier[MAX_TOKEN_LEN];
+            strcpy(identifier, token.text);
+
+            getNextToken(&token);
+            if (token.type == TOKEN_ASSIGN) {
+                ASTNode *assign = createNode(NODE_ASSIGNMENT, identifier);
+                getNextToken(&token);
+                assign->left = parseArithmetic(&token);  // Parse the arithmetic expression
+                current->left = assign;
+                current = assign;
+            }
+        }
+    }
+
+    return root;
+}
+
+// Generate Assembly Code
+void generateAssembly(ASTNode *node) {
+    if (!node) return;
+
+    switch (node->type) {
+        case NODE_DECLARATION:
+            printf("; Declaring variable %s\n", node->value);
+            break;
+        case NODE_ASSIGNMENT:
+            printf("MOV %s, %s\n", node->value, node->left->value);
+            break;
+        case NODE_ARITHMETIC:
+            if (node->right) {
+                generateAssembly(node->left);
+                printf("ADD %s, %s\n", node->left->value, node->right->value);
+            }
+            break;
+        default:
+            break;
+    }
+
+    generateAssembly(node->left);
+    generateAssembly(node->right);
+}
+
+// Main Program
+int main() {
+    printf("Lexing and Parsing...\n");
+    ASTNode *ast = parseProgram();
+
+    printf("\nGenerating Assembly...\n");
+    generateAssembly(ast);
+
+    return 0;
+}
